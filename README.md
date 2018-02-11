@@ -3,3 +3,5 @@
 ## Dr. Scott Cook
 
 Please read setup.ipynb
+
+:)
