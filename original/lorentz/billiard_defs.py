@@ -34,11 +34,31 @@ class Wall():
         part.pw_mask[self.idx, p] = False
         part.pw_mask[self.wrap_wall, p] = True
 
+    def pw_no_slip_law(self, part, p):  
+        """
+        Particle-wall no-slip law in any dimension, per Renato Feres.
+        """
+        nu = self.normal(part.pos[p])
+        m = part.mass[p]
+        g = part.gamma[p]
+        r = part.radius[p]
+        d = (2*m*g**2)/(1+g**2)
+        
+        U_in = part.spin[p]
+        v_in = part.vel[p]
+        U_out = U_in - (d/(m*g**2) * Lambda_nu(U_in, nu)) + (d/(m*r*g**2)) * E_nu(v_in, nu)
+        v_out = (r*d/m) * Gamma_nu(U_in, nu) + v_in - 2 * Pi_nu(v_in, nu) - (d/m) * Pi(v_in,nu)
+
+        part.spin[p] = U_out
+        part.vel[p] = v_out
+
     def resolve_collision(self, part, p):
         if self.collision_law == 'specular':
             self.pw_specular_law(part, p)
         elif self.collision_law == 'wrap':
             self.pw_wrap_law(part, p)
+        elif self.collision_law == 'no_slip':
+            self.pw_no_slip_law(part, p)
         else:
             raise Exception('Unknown pw collision law {}'.format(self.collision_law))
     
@@ -138,26 +158,31 @@ class SphereWall(Wall):
 
 class Particles():
     def __init__(self, **kwargs):
-        params = {'max_steps':50, 'dim':2, 'num':1, 'radius':1.0, 'mass':1.0, 'pos_init':None, 'vel_init':None
-                 ,'collision_law':'specular', 'cell_size':None}
+        params = {'max_steps':50, 'dim':2, 'num':1, 'radius':1.0, 'mass':1.0, 'gamma':'uniform'
+                 ,'pos_init':None, 'vel_init':None, 'collision_law':'specular', 'cell_size':None}
         params.update(kwargs)
         
         for key, val in params.items():
             setattr(self, key, val)
         
+        self.dim_ang = int(self.dim * (self.dim-1) / 2)
         self.mass = self.expand(self.mass)
         self.radius = self.expand(self.radius)
-        self.pp_gap_min = cross_subtract(self.radius, -self.radius)
-        np.fill_diagonal(self.pp_gap_min, -1)
+        if(self.gamma == 'uniform'):
+            self.gamma = np.sqrt(2/(2+self.dim))
+        elif(self.gamma == 'shell'):
+            self.gamma = np.sqrt(2/self.dim)
+        self.gamma = self.expand(self.gamma)
+        self.mom_inert = self.mass * (self.gamma * self.radius)**2
 
         if self.cell_size is None:
             self.cell_size = np.full(self.dim, np.inf)
         self.cell_size = np.asarray(self.cell_size, dtype=float)
         self.cell = np.zeros([self.num, self.dim], dtype=int)
         
-        self.pos = np.full([self.num, self.dim], np.inf)
-        self.vel = self.pos.copy()
-        
+        self.pp_gap_min = cross_subtract(self.radius, -self.radius)
+        np.fill_diagonal(self.pp_gap_min, -1)
+
         self.dt_pp = np.zeros([self.num, self.num], dtype='float')
         self.dt_pw = np.zeros([len(wall), self.num], dtype='float')
         self.pp_mask = self.dt_pp.copy().astype(bool)
@@ -169,8 +194,10 @@ class Particles():
         self.col = {}
         self.t_hist = []
         self.pos_hist = []
-        self.cell_hist = []
         self.vel_hist = []
+        self.orient_hist = []
+        self.spin_hist = []
+        self.cell_hist = []
         self.col_hist = []
 
     def pos_to_global(self):
@@ -181,7 +208,7 @@ class Particles():
         self.pp_gap = np.linalg.norm(dx, axis=-1) - self.pp_gap_min
         return self.pp_gap 
     
-    def check_gap(self, soft=False, p=None):
+    def check_gap(self, soft=False, p=Ellipsis):
         tol = abs_tol
         if soft == True:
             tol = -abs_tol
@@ -189,9 +216,8 @@ class Particles():
         self.pw_gap = np.array([w.get_pw_gap() for w in wall])
         pw_check = self.pw_gap > tol
         pp_check = self.pp_gap > tol
-        if p is not None:
-            pw_check = pw_check[:,p]
-            pp_check = pp_check[:,p]
+        pw_check = pw_check[:,p]
+        pp_check = pp_check[:,p]
         return np.all(pw_check) and np.all(pp_check)
 
     def get_pp_col_time(self, mask=None):
@@ -207,7 +233,11 @@ class Particles():
     def make_mesh(self):
         self.mesh = []
         for p in range(self.num):
-            self.mesh.append(sphere_mesh(dim=self.dim, radius=self.radius[p]))
+            R = self.radius[p]
+            M = sphere_mesh(dim=self.dim, radius=R)
+            if self.dim == 2:
+                M = np.vstack([M, [-R,0]])
+            self.mesh.append(M)
         self.mesh = np.asarray(self.mesh)
 
     def expand(self, X):
@@ -224,23 +254,53 @@ class Particles():
             given = np.asarray(given)
             if given.ndim < target.ndim:
                 given = given[np.newaxis]
-            n, d = given.shape[:2]
-            if d == self.dim:
-                target[:n] = given.copy()
-            else:
-                print('invalid shape - ignoring')
+            n = given.shape[0]
+            target[:n] = given.copy()
         return n
 
     def set_vel_init(self, init=None):
+        self.vel = np.full([self.num, self.dim], np.inf)
         n = self.set_given(self.vel, init)
-        self.vel[n:] = random_uniform_sphere(num=self.num-n, dim=self.dim, radius=1.0)
+        for p in range(n, self.num):
+            self.vel[p] = random_uniform_sphere(num=1, dim=self.dim, radius=1.0)
     
+    def set_orient_init(self, init=None):
+        self.orient = np.full([self.num, self.dim, self.dim], np.inf)
+        n = 0
+        for p in range(n, self.num):
+            self.orient[p] = np.eye(self.dim, self.dim)
+
+    def set_spin_init(self, init=None):
+        S = np.full([self.num, self.dim_ang], np.inf)
+        n = self.set_given(S, init)
+        for p in range(n, self.num):
+            S[p] = 10000 * random_uniform_sphere(num=1, dim=self.dim_ang, radius=1.0)
+        self.spin = np.asarray([matrix_from_vector(s) for s in S])
+                
+    def check_angular(self, p=Ellipsis):
+        O = self.orient[p]
+        S = self.spin[p]
+        orient_det = np.abs(np.linalg.det(O))-1
+        orient_det_check = np.abs(orient_det) < abs_tol
+        spin_skew = np.abs(S + np.swapaxes(S, -2, -1))
+        spin_skew = spin_skew.sum(axis=-1).sum(axis=-1)
+        spin_skew_check = spin_skew < abs_tol
+        #print(O)
+        #print(orient_det)
+        #print(orient_det_check)
+        #print(S)
+        #print(spin_skew)
+        #print(spin_skew_check)
+
+        return np.all(orient_det_check) and np.all(spin_skew_check)
+
     def set_pos_init(self, init=None):
+        self.pos = np.full([self.num, self.dim], np.inf)
         n = self.set_given(self.pos, init)
         with np.errstate(invalid='ignore'):
             for p in range(n, self.num):
                     self.randomize_pos(p)
-    
+
     def randomize_pos(self, p):
         r = self.radius[p]
         max_attempts = 50
@@ -277,9 +337,11 @@ class Particles():
     
     def record_state(self):
         self.t_hist.append(self.t)
-        self.pos_hist.append(self.pos.copy())
-        self.cell_hist.append(self.cell.copy())
+        self.pos_hist.append(self.pos.copy())        
         self.vel_hist.append(self.vel.copy())
+        self.orient_hist.append(self.orient.copy())
+        self.spin_hist.append(self.spin.copy())
+        self.cell_hist.append(self.cell.copy())
         self.col_hist.append(self.col.copy())
 
             
@@ -290,15 +352,19 @@ def check():
         raise Exception('Not all wall and part dimensions agree')
     if (part.pos.shape != (N,D)) or (part.vel.shape != (N,D)):
         raise Exception('Some dynamical variables do not have correct shape')
-    if part.check_gap() == False:
-        raise Exception('Particle escaped')
+    if np.any((part.gamma < 0) | (part.gamma > np.sqrt(2/part.dim))):
+        raise Exception('illegal mass distribution parameter {}'.format(gamma))
 
+        
 def run_trial(wall, part):
     check()
     part.record_state()
     for step in range(part.max_steps):
         if part.check_gap(soft=True) == False:
             raise Exception('A particle escaped')
+        if part.check_angular() == False:
+            raise Exception('A particle has invalid orintation or spin matrix')
+        
 
         part.dt_pp = part.get_pp_col_time()
         for (i,w) in enumerate(wall):
@@ -334,10 +400,12 @@ def run_trial(wall, part):
 
         part.record_state()
         
-    part.t_hist = np.asarray(part.t_hist)
-    part.cell_hist = np.asarray(part.cell_hist)
-    part.pos_hist = np.asarray(part.pos_hist)
-    part.vel_hist = np.asarray(part.vel_hist)
+    #part.t_hist = np.asarray(part.t_hist)
+    #part.cell_hist = np.asarray(part.cell_hist)
+    #part.pos_hist = np.asarray(part.pos_hist)
+    #part.vel_hist = np.asarray(part.vel_hist)
+    #part.orient_hist = np.asarray(part.orient_hist)
+    #part.spin_hist = np.asarray(part.spin_hist)
 
 
     
@@ -347,8 +415,104 @@ def run_trial(wall, part):
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+import scipy.linalg
 
+
+def smoother(part, max_distort=50):
+    """
+    If 0<max_distort<=100, this interpolates between collisions do give "smooth" motion for the particles.  Smaller max_distort means smoother animation but also longer processing and larger files.
+    """
+    t, c, x, v, o, s = part.t_hist, part.cell_hist, part.pos_hist, part.vel_hist, part.orient_hist, part.spin_hist
+    dts = np.diff(t)
+    if (max_distort is None) or (max_distort < 0) or (max_distort > 100):
+        ddts = dts
+        num_frames = np.ones_like(dts).astype(int)
+    else:
+        # We will divide the time between each pair of successive collisions into frames that have length as simliar as possible.
+        distort = np.inf
+        min_frames = 0        
+        while distort >= max_distort:
+            min_frames += 1
+            nominal_frame_length = dts.min() / min_frames  # Time increment = shortest time btw 2 collisions / min_frames
+            num_frames = np.round(dts / nominal_frame_length).astype(int) # Divide each step into pieces of length as close to nominal_frame_length as possible
+            ddts = dts / num_frames  # Compute frame length within each step
+            m = ddts.mean()
+            d = np.abs(ddts-m).max() # frame length farthest from average
+            distort = d / m * 100 
+
+    # Now do the interpolation.  re_x denotes the interpolated version of x
+    re_t, re_c, re_x, re_v, re_o, re_s = [t[0]], [c[0]], [x[0]], [v[0]], [o[0]], [s[0]]
+    for (i, ddt) in enumerate(ddts):
+        re_t[-1] = t[i]
+        re_c[-1] = c[i]
+        re_x[-1] = x[i] + c[i] * part.cell_size * 2
+        re_v[-1] = v[i]
+        re_s[-1] = s[i]        
+        dx = re_v[-1] * ddt
+        do = [scipy.linalg.expm(ddt * A) for A in re_s[-1]] # incremental rotatation during each frame
+        # Note that orientation was not computed during the simulation because it was not needed to determine point of collision or outgoing velocity and spin.  So this is the first time orientation is computed.
+
+        for f in range(num_frames[i]):
+            re_t.append(re_t[-1] + ddt)
+            re_c.append(re_c[-1])
+            re_x.append(re_x[-1] + dx)
+            re_v.append(re_v[-1])
+            re_s.append(re_s[-1])
+            U = [R.dot(O) for (R,O) in zip(re_o[-1], do)] # rotates each particle the right amount
+            re_o.append(np.array(U))
+
+    part.re_t = np.asarray(re_t)
+    part.re_cell = np.asarray(re_c)
+    part.re_pos = np.asarray(re_x)
+    part.re_vel = np.asarray(re_v)
+    part.re_orient = np.asarray(re_o)
+    part.re_spin = np.asarray(re_s)
+
+    
 def draw_hist(wall, part):
+    dpos = np.diff(part.re_pos, axis=0)
+    max_steps = dpos.shape[0]
+
+    def draw(steps=1):        
+        cell = part.re_cell[:steps+1].T
+        cell_range = [2 * part.cell_size[d] * np.arange(cell[d].min(), cell[d].max()+1) for d in range(part.dim)]
+        translates = it.product(*cell_range)
+
+        fig = plt.figure(figsize=[10,10])
+        if part.dim == 2:
+            ax = fig.gca()
+            for trans in translates:
+                for w in wall:
+                    ax.plot(*(w.mesh + trans).T, color='black')
+
+        cm = plt.cm.gist_rainbow
+        idx = np.linspace(0, cm.N-1 , part.num).round().astype(int)
+        clr = [cm(i) for i in idx]
+        
+        x = part.re_pos[:steps+1]
+        R = part.re_orient[steps]
+        dx = dpos[:steps]
+        for p in range(part.num):
+            ax.quiver(x[:-1,p,0], x[:-1,p,1], dx[:,p,0], dx[:,p,1], angles='xy', scale_units='xy', scale=1, color=clr[p])
+            ax.plot(*(part.mesh[p].dot(R[p].T) + x[-1,p]).T, color=clr[p])
+        ax.set_aspect('equal')
+        plt.title('time = {:.4f}'.format(part.re_t[steps]))
+        plt.show()
+
+    l = widgets.Layout(width='150px')
+    step_interval = 1
+    step_text = widgets.BoundedIntText(min=1, max=max_steps, value=1, continuous_update=True, layout=l)
+    step_slider = widgets.IntSlider(min=1, max=max_steps, value=1, readout=False, continuous_update=False, layout=l)
+    play_button = widgets.Play(min=1, max=max_steps, interval=step_interval*10, layout=l)
+    widgets.jslink((step_text, 'value'), (step_slider, 'value'))
+    widgets.jslink((step_text, 'value'), (play_button, 'value'))
+    
+    img = widgets.interactive_output(draw, {'steps':step_text})
+#     rept = widgets.interactive_output(report, {'steps':step_text})
+    display(widgets.HBox([widgets.VBox([step_text, step_slider, play_button]), img]))
+    
+
+def draw_hist_old(wall, part):
     pos = 2 * part.cell_hist * part.cell_size + part.pos_hist
     dpos = np.diff(pos, axis=0)
     t = part.t_hist
@@ -381,7 +545,7 @@ def draw_hist(wall, part):
 
     l = widgets.Layout(width='150px')
     step_interval = 1
-    step_text = widgets.BoundedIntText(min=1, max=max_steps, value=1, continuous_update=False, layout=l)
+    step_text = widgets.BoundedIntText(min=1, max=max_steps, value=1, continuous_update=True, layout=l)
     step_slider = widgets.IntSlider(min=1, max=max_steps, value=1, readout=False, continuous_update=False, layout=l)
     play_button = widgets.Play(min=1, max=max_steps, interval=step_interval*10, layout=l)
     widgets.jslink((step_text, 'value'), (step_slider, 'value'))
@@ -451,10 +615,68 @@ def random_uniform_ball(num=1, dim=2, radius=1.0):
     pos = random_uniform_sphere(num, dim, radius)
     r = rnd.uniform(size=[num, 1])
     return r**(1/dim) * pos
-    
+
+
+#######################################################################################################
+### No-Slip Collision Functions ###
+#######################################################################################################
+def Pi_nu(v, nu):
+    return v.dot(nu) * nu
+
+def Pi(v, nu):
+    w = Pi_nu(v ,nu)
+    return v - w
+
+def Lambda_nu(U, nu):
+    return wedge(nu, U.dot(nu))
+
+def E_nu(v, nu):
+    return wedge(nu, v)
+
+def Gamma_nu(U, nu):
+    return U.dot(nu)
+
+
 #######################################################################################################
 ### Linear Algebra Functions ###
 #######################################################################################################
+def wedge(a,b):
+    return np.outer(b,a)-np.outer(a,b)
+
+def make_symmetric(A, skew=False):
+    """
+    Returns symmetric or skew-symmatric matrix by copying upper triangular onto lower.
+    """
+    A = np.asarray(A)
+    U = np.triu(A,1)
+    if skew == True:
+        return U - U.T
+    else:
+        return np.triu(A,0) + U.T
+
+def matrix_from_vector(v):
+    l = len(v)
+    # l = d(d-1) -> d**2 - d - 2l = 0
+    d = (1 + np.sqrt(1 + 8*l)) / 2
+    if d % 1 != 0:
+        raise Exception('vector {} of length {} converts to dim = {:.2f}.  Not integer.'.format(v,l,d))
+    d = int(d)
+    M = np.zeros([d,d])
+    idx = np.triu_indices_from(M,1)
+    s = (-1)**(np.arange(len(v))+1)
+    w = v * s
+    w = w[::-1]
+    M[idx] = w
+    M = make_symmetric(M, skew=True)
+    return M
+
+def vector_from_matrix(M):
+    idx = np.triu_indices_from(M,1)
+    w = M[idx]
+    s = (-1)**(np.arange(len(w))+1)
+    w = w[::-1]    
+    v = w * s
+    return v
 
 def proj(a, b):
     return (a.dot(b) / b.dot(b)) * b
