@@ -418,7 +418,7 @@ from mpl_toolkits.mplot3d import Axes3D
 import scipy.linalg
 
 
-def smoother(part, max_distort=50):
+def smoother(part, max_distort=50, min_frames=0):
     """
     If 0<max_distort<=100, this interpolates between collisions do give "smooth" motion for the particles.  Smaller max_distort means smoother animation but also longer processing and larger files.
     """
@@ -430,7 +430,6 @@ def smoother(part, max_distort=50):
     else:
         # We will divide the time between each pair of successive collisions into frames that have length as simliar as possible.
         distort = np.inf
-        min_frames = 0        
         while distort >= max_distort:
             min_frames += 1
             nominal_frame_length = dts.min() / min_frames  # Time increment = shortest time btw 2 collisions / min_frames
@@ -469,7 +468,7 @@ def smoother(part, max_distort=50):
     part.re_spin = np.asarray(re_s)
 
     
-def draw_hist(wall, part):
+def draw_hist(wall, part, duration=10):
     dpos = np.diff(part.re_pos, axis=0)
     max_steps = dpos.shape[0]
 
@@ -493,17 +492,17 @@ def draw_hist(wall, part):
         R = part.re_orient[steps]
         dx = dpos[:steps]
         for p in range(part.num):
-            ax.quiver(x[:-1,p,0], x[:-1,p,1], dx[:,p,0], dx[:,p,1], angles='xy', scale_units='xy', scale=1, color=clr[p])
+            ax.quiver(x[:-1,p,0], x[:-1,p,1], dx[:,p,0], dx[:,p,1], angles='xy', scale_units='xy', scale=1, color=clr[p], headwidth=1)
             ax.plot(*(part.mesh[p].dot(R[p].T) + x[-1,p]).T, color=clr[p])
         ax.set_aspect('equal')
         plt.title('time = {:.4f}'.format(part.re_t[steps]))
         plt.show()
 
     l = widgets.Layout(width='150px')
-    step_interval = 1
+    step_interval = 1000*duration / max_steps
     step_text = widgets.BoundedIntText(min=1, max=max_steps, value=1, continuous_update=True, layout=l)
-    step_slider = widgets.IntSlider(min=1, max=max_steps, value=1, readout=False, continuous_update=False, layout=l)
-    play_button = widgets.Play(min=1, max=max_steps, interval=step_interval*10, layout=l)
+    step_slider = widgets.IntSlider(min=1, max=max_steps, value=1, readout=False, continuous_update=True, layout=l)
+    play_button = widgets.Play(min=1, max=max_steps, interval=step_interval, layout=l)
     widgets.jslink((step_text, 'value'), (step_slider, 'value'))
     widgets.jslink((step_text, 'value'), (play_button, 'value'))
     
@@ -511,49 +510,6 @@ def draw_hist(wall, part):
 #     rept = widgets.interactive_output(report, {'steps':step_text})
     display(widgets.HBox([widgets.VBox([step_text, step_slider, play_button]), img]))
     
-
-def draw_hist_old(wall, part):
-    pos = 2 * part.cell_hist * part.cell_size + part.pos_hist
-    dpos = np.diff(pos, axis=0)
-    t = part.t_hist
-    max_steps = t.shape[0]-1
-
-    def draw(steps=1):        
-        cell = part.cell_hist[:steps].T
-        cell_range = [2 * part.cell_size[d] * np.arange(cell[d].min(), cell[d].max()+1) for d in range(part.dim)]
-        translates = it.product(*cell_range)
-
-        fig = plt.figure(figsize=[10,10])
-        if part.dim == 2:
-            ax = fig.gca()
-            for trans in translates:
-                for w in wall:
-                    ax.plot(*(w.mesh + trans).T, color='black')
-
-        cm = plt.cm.gist_rainbow
-        idx = np.linspace(0, cm.N-1 , part.num).round().astype(int)
-        clr = [cm(i) for i in idx]
-        
-        x = pos[:steps]
-        dx = dpos[:steps]
-        for p in range(part.num):
-            ax.quiver(x[:,p,0], x[:,p,1], dx[:,p,0], dx[:,p,1], angles='xy', scale_units='xy', scale=1, color=clr[p])
-            ax.plot(*(part.mesh[p] + pos[steps, p, :]).T, color=clr[p])
-        ax.set_aspect('equal')
-        plt.title('time = {:.4f}'.format(t[steps]))
-        plt.show()
-
-    l = widgets.Layout(width='150px')
-    step_interval = 1
-    step_text = widgets.BoundedIntText(min=1, max=max_steps, value=1, continuous_update=True, layout=l)
-    step_slider = widgets.IntSlider(min=1, max=max_steps, value=1, readout=False, continuous_update=False, layout=l)
-    play_button = widgets.Play(min=1, max=max_steps, interval=step_interval*10, layout=l)
-    widgets.jslink((step_text, 'value'), (step_slider, 'value'))
-    widgets.jslink((step_text, 'value'), (play_button, 'value'))
-    
-    img = widgets.interactive_output(draw, {'steps':step_text})
-#     rept = widgets.interactive_output(report, {'steps':step_text})
-    display(widgets.HBox([widgets.VBox([step_text, step_slider, play_button]), img]))
 
 def flat_mesh(tangents):
     pts = 100
