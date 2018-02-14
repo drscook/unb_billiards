@@ -274,7 +274,7 @@ class Particles():
         S = np.full([self.num, self.dim_ang], np.inf)
         n = self.set_given(S, init)
         for p in range(n, self.num):
-            S[p] = 10000 * random_uniform_sphere(num=1, dim=self.dim_ang, radius=1.0)
+            S[p] = random_uniform_sphere(num=1, dim=self.dim_ang, radius=1.0)
         self.spin = np.asarray([matrix_from_vector(s) for s in S])
                 
     def check_angular(self, p=Ellipsis):
@@ -311,6 +311,7 @@ class Particles():
                 break
         if self.check_gap(p=p) == False:
             raise Exception('Could not randomize position of particle {}'.format(p))
+
 
     def resolve_complex(self):
         part.record_state()
@@ -397,17 +398,22 @@ def run_trial(wall, part):
             part.resolve_collision(p1, p2)
         else:
             raise Exception('Something bizarre happened')
-
         part.record_state()
         
-    #part.t_hist = np.asarray(part.t_hist)
-    #part.cell_hist = np.asarray(part.cell_hist)
-    #part.pos_hist = np.asarray(part.pos_hist)
-    #part.vel_hist = np.asarray(part.vel_hist)
-    #part.orient_hist = np.asarray(part.orient_hist)
-    #part.spin_hist = np.asarray(part.spin_hist)
+    part.t_hist = np.asarray(part.t_hist)
+    part.cell_hist = np.asarray(part.cell_hist)
+    part.pos_hist = np.asarray(part.pos_hist)
+    part.vel_hist = np.asarray(part.vel_hist)
+    part.orient_hist = np.asarray(part.orient_hist)
+    part.spin_hist = np.asarray(part.spin_hist)
 
 
+def KE(part):
+    lin_KE = 1/2 * part.mass * (part.vel_hist**2).sum(axis=-1)
+    ang_vel = np.asarray([[vector_from_matrix(M) for M in particles] for particles in part.spin_hist])
+    ang_KE = 1/2 * part.mom_inert * (ang_vel**2).sum(axis=-1)
+    KE = lin_KE _ ang_KE
+    return KE
     
 #######################################################################################################
 ###  Graphics Functions ###
