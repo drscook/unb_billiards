@@ -313,7 +313,7 @@ class Particles():
             raise Exception('Could not randomize position of particle {}'.format(p))
 
     def resolve_complex(self):
-        part.record_state()
+        #part.record_state()
         part_involved = part.pw_mask.sum(axis=0) + part.pp_mask.sum(axis=0)
         for p in np.nonzero(part_involved)[0]:
             part.randomize_pos(p)
@@ -329,9 +329,55 @@ class Particles():
         self.vel[p1] += 2 * (m2/M) * w
         self.vel[p2] -= 2 * (m1/M) * w
     
+    def pp_no_slip_law(self, p1, p2):
+        print('Using pp no slip')
+        m1 = part.mass[p1]
+        m2 = part.mass[p2]
+        M = m1 + m2
+        g1 = part.gamma[p1]
+        g2 = part.gamma[p2]
+        r1 = part.radius[p1]
+        r2 = part.radius[p2]        
+
+        d = 2/((1/m1)*(1+1/g1**2) + (1/m2)*(1+1/g2**2))
+        dx = part.pos[p2] - part.pos[p1]    
+        nu = munit(dx)
+        U1_in = part.spin[p1]
+        U2_in = part.spin[p2]
+        v1_in = part.vel[p1]
+        v2_in = part.vel[p2]
+
+        U1_out = (U1_in-d/(m1*g1**2) * Lambda_nu(U1_in, nu)) \
+                    + (-d/(m1*r1*g1**2)) * E_nu(v1_in, nu) \
+                    + (-r2/r1)*(d/(m1*g1**2)) * Lambda_nu(U2_in, nu) \
+                    + d/(m1*r1*g1**2) * E_nu(v2_in, nu)
+
+        v1_out = (-r1*d/m1) * Gamma_nu(U1_in, nu) \
+                    + (v1_in - 2*m2/M * Pi_nu(v1_in, nu) - (d/m1) * Pi(v1_in, nu)) \
+                    + (-r2*d/m1) * Gamma_nu(U2_in, nu) \
+                    + (2*m2/M) * Pi_nu(v2_in, nu) + (d/m1) * Pi(v2_in, nu)
+
+        U2_out = (-r1/r2)*(d/(m2*g2**2)) * Lambda_nu(U1_in, nu) \
+                    + (-d/(m2*r2*g2**2)) * E_nu(v1_in, nu) \
+                    + (U2_in - (d/(m2*g2**2)) * Lambda_nu(U2_in, nu)) \
+                    + (d/(m2*r2*g2**2)) * E_nu(v2_in, nu)
+
+        v2_out = (r1*d/m2) * Gamma_nu(U1_in, nu) \
+                    + (2*m1/M) * Pi_nu(v1_in, nu) + (d/m2) * Pi(v1_in, nu) \
+                    + (r2*d/m2) * Gamma_nu(U2_in, nu) \
+                    + v2_in - (2*m1/M) * Pi_nu(v2_in, nu) - (d/m2) * Pi(v2_in,nu)
+        part.spin[p1] = U1_out
+        part.spin[p2] = U2_out
+        part.vel[p1] = v1_out
+        part.vel[p2] = v2_out    
+    
     def resolve_collision(self, p1, p2):
         if self.collision_law == 'specular':
             self.pp_specular_law(p1, p2)
+        elif self.collision_law == 'no_slip':
+            self.pp_no_slip_law(self, p1, p2)
+        elif self.collision_law == 'ignore':
+            pass
         else:
             raise Exception('Unknown pp collision law {}'.format(self.collision_law))
     
@@ -400,12 +446,12 @@ def run_trial(wall, part):
 
         part.record_state()
         
-    #part.t_hist = np.asarray(part.t_hist)
-    #part.cell_hist = np.asarray(part.cell_hist)
-    #part.pos_hist = np.asarray(part.pos_hist)
-    #part.vel_hist = np.asarray(part.vel_hist)
-    #part.orient_hist = np.asarray(part.orient_hist)
-    #part.spin_hist = np.asarray(part.spin_hist)
+    part.t_hist = np.asarray(part.t_hist)
+    part.cell_hist = np.asarray(part.cell_hist)
+    part.pos_hist = np.asarray(part.pos_hist)
+    part.vel_hist = np.asarray(part.vel_hist)
+    part.orient_hist = np.asarray(part.orient_hist)
+    part.spin_hist = np.asarray(part.spin_hist)
 
 
     
@@ -418,7 +464,7 @@ from mpl_toolkits.mplot3d import Axes3D
 import scipy.linalg
 
 
-def smoother(part, max_distort=50, min_frames=0):
+def smoother(part, max_distort=None, min_frames=0):
     """
     If 0<max_distort<=100, this interpolates between collisions do give "smooth" motion for the particles.  Smaller max_distort means smoother animation but also longer processing and larger files.
     """
@@ -492,7 +538,7 @@ def draw_hist(wall, part, duration=10):
         R = part.re_orient[steps]
         dx = dpos[:steps]
         for p in range(part.num):
-            ax.quiver(x[:-1,p,0], x[:-1,p,1], dx[:,p,0], dx[:,p,1], angles='xy', scale_units='xy', scale=1, color=clr[p], headwidth=1)
+            ax.quiver(x[:-1,p,0], x[:-1,p,1], dx[:,p,0], dx[:,p,1], angles='xy', scale_units='xy', scale=1, color=clr[p])#, headwidth=1)
             ax.plot(*(part.mesh[p].dot(R[p].T) + x[-1,p]).T, color=clr[p])
         ax.set_aspect('equal')
         plt.title('time = {:.4f}'.format(part.re_t[steps]))
@@ -540,6 +586,9 @@ def sphere_mesh(dim, radius):
 #######################################################################################################
 
 def solve_quadratic(a, b, c, mask=None, non_negative=False):
+    """
+    Quadratic equation solver.  True entries in mask return infinity.
+    """
     small = np.full_like(a, np.inf)
     d = b**2 - 4*a*c
     lin = (abs(a) < abs_tol) & (abs(b) >= abs_tol)
@@ -562,10 +611,12 @@ def solve_quadratic(a, b, c, mask=None, non_negative=False):
         big[big<0] = np.inf
     return small, big
 
+
 def random_uniform_sphere(num=1, dim=2, radius=1.0):
     pos = rnd.normal(size=[num, dim])
     pos = make_unit(pos, axis=1)
     return abs(radius) * pos
+
 
 def random_uniform_ball(num=1, dim=2, radius=1.0):
     pos = random_uniform_sphere(num, dim, radius)
