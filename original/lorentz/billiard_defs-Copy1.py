@@ -75,7 +75,6 @@ class Wall():
     #See last pages of: https://github.com/drscook/unb_billiards/blob/master/references/no%20slip%20collisions/feres_N_dim_no_slip_law_2017.pdf
     # Uses functions like Lambda_nu defined at the end of this file
     def wp_no_slip_law(self, part, p):  
-        print('wrap law')
         nu = self.normal(part.pos[p])
         m = part.mass[p]
         g = part.gamma[p]
@@ -336,6 +335,7 @@ class Particles():
         spin_skew_check = np.abs(spin_skew) < abs_tol
         return np.all(orient_det_check) and np.all(spin_skew_check)
 
+
     def pos_to_global(self):
         # self.pos is local to current cell.  This return the global position by adding cell offset.
         return self.pos + self.cell * self.cell_size * 2
@@ -500,7 +500,7 @@ def run_trial(wall, part):
             part.dt_wp[i] = w.get_wp_col_time()
             
         if part.pp_collision_law == 'ignore':
-            part.dt_pp
+                part.dt_pp
         part.dt_pp = part.get_pp_col_time()
         part.dt = np.min([np.min(part.dt_pp), np.min(part.dt_wp)])
         if np.isinf(part.dt):
@@ -508,12 +508,7 @@ def run_trial(wall, part):
 
         part.t += part.dt
         part.pos += part.vel * part.dt
-        # This code would update orientation.  However, this does not affect the dynamics.  For the sake of efficiency, we will wait until later.
-#         for p in range(part.num):
-#             R = scipy.linalg.expm(part.dt * part.spin[p])
-#             part.orient[p] = R.dot(part.orient[p])
-        
-        
+
         part.pp_mask = (part.dt_pp - part.dt) < abs_tol
         part.wp_mask = (part.dt_wp - part.dt) < abs_tol
 
@@ -560,9 +555,8 @@ matplotlib.rc('animation', html='html5')
 
 
 
-# Interpolate between collisions, compute correct orientation, and convert local to global positions
-# Note that, for efficiency, orientation was not computed during simulation because it was not needed (all collision laws are orientation invariant).
-
+# Interpolate between collisions AND compute correct orientation.  Note that, for efficiency, orientation was
+# not computed during simulation because it was not needed (all collision laws are orientation invariant).  
 def smoother(part, min_frames=None):
     t, c, x, v, o, s = part.t_hist, part.cell_hist, part.pos_hist, part.vel_hist, part.orient_hist, part.spin_hist
     dts = np.diff(t)
@@ -583,7 +577,7 @@ def smoother(part, min_frames=None):
         re_c[-1] = c[i]
         re_x[-1] = x[i] + c[i] * part.cell_size * 2
         re_v[-1] = v[i]
-        re_s[-1] = s[i]
+        re_s[-1] = s[i]        
         dx = re_v[-1] * ddt
         do = [scipy.linalg.expm(ddt * A) for A in re_s[-1]] # incremental rotatation during each frame
 
@@ -603,112 +597,8 @@ def smoother(part, min_frames=None):
     part.re_orient = np.asarray(re_o)
     part.re_spin = np.asarray(re_s)
 
-def draw_background(cell):
-    ax = plt.gca()
-    cell_range = [2 * s * np.arange(np.min(c), np.max(c)+1) for (s,c) in zip(part.cell_size, cell)]
-    translates = it.product(*cell_range)
-    if part.dim == 2:
-        for trans in translates:
-            for w in wall:
-                ax.plot(*(w.mesh + trans).T, color='black')
-
     
-def animate_now(num_frames=None, duration=None, fps=None):
-    if num_frames == -1:
-        num_frames = part.re_pos.shape[0]-1
-    if (num_frames is None) + (duration is None) + (fps is None) != 1:
-        print('Must specify exactly 2 of num_frames, duration, and fps')
-        return None
-    elif (num_frames is None):
-        num_frames = int(np.round(fps * duration))
-    elif (fps is None):
-        fps = num_frames / duration
-    duration = num_frames / fps
-
-    pos = part.re_pos[:num_frames+1]
-    dpos = np.diff(pos, axis=0)
-    orient = part.re_orient[:num_frames+1]
-    cell = part.re_cell[:num_frames+1].T
-    cm = plt.cm.gist_rainbow
-    idx = np.linspace(0, cm.N-1 , part.num).round().astype(int)
-    clr = [cm(i) for i in idx]
-    fig, ax = plt.subplots(figsize=[10,10]);
-    ax.set_aspect('equal')
-    draw_background(cell)
-
-    time_label = fig.text(0.5, 0.90, 's=0 t=0.00', ha='center', va='top', fontsize=10)
-    
-    path = []
-    bdy = []
-    for p in range(part.num):
-        path.append(ax.plot([], [], color=clr[p])[0])
-        bdy.append(ax.plot([], [], color=clr[p])[0])
-
-    def update(i):
-        s = max(i,1)
-        time_label.set_text('s={} t={:.2f}'.format(s,part.re_t[s]))
-        for p in range(part.num):
-            path[p].set_data(pos[:s+1,p,0], pos[:s+1,p,1])
-            bdy[p].set_data(*(part.mesh[p].dot(orient[s,p].T) + pos[s,p]).T)
-        return path + bdy
-    plt.close()
-    return animation.FuncAnimation(fig, update, frames=num_frames+1, interval=1000/fps, blit=True, repeat=False)
-    
-    
-    
-    
-    
-    
-    
-def interactive_plot(num_frames=-1):
-    if num_frames == -1:
-        num_frames = part.re_pos.shape[0]-1
-
-    pos = part.re_pos[:num_frames+1]
-    dpos = np.diff(pos, axis=0)
-    orient = part.re_orient[:num_frames+1]
-    cell = part.re_cell[:num_frames+1].T
-    cm = plt.cm.gist_rainbow
-    idx = np.linspace(0, cm.N-1 , part.num).round().astype(int)
-    clr = [cm(i) for i in idx]
-    
-    
-    def update(i):
-        s = max(i,1)
-        fig, ax = plt.subplots(figsize=[10,10]);
-        ax.set_aspect('equal')
-        draw_background(cell)
-
-        for p in range(part.num):
-            ax.plot(pos[:s+1,p,0], pos[:s+1,p,1])
-            ax.plot(*(part.mesh[p].dot(orient[s,p].T) + pos[s,p]).T)
-            
-#             ax.quiver(pos[:s,p,0], pos[:s,p,1], dpos[:,p,0], dpos[:,p,1], angles='xy', scale_units='xy', scale=1, color=clr[p])#, headwidth=1)
-#             ax.plot(*(part.mesh[p].dot(orient[p].T) + pos[-1,p]).T, color=clr[p])
-        ax.set_aspect('equal')
-        plt.title('time = {:.4f}'.format(part.re_t[s]))
-        plt.show()
-
-    l = widgets.Layout(width='150px')
-    step_text = widgets.BoundedIntText(min=1, max=num_frames, value=1, continuous_update=True, layout=l)
-    step_slider = widgets.IntSlider(min=1, max=num_frames, value=1, readout=False, continuous_update=True, layout=l)
-    
-    play_button = widgets.Play(min=1, max=num_frames, interval=100, layout=l)
-    widgets.jslink((step_text, 'value'), (step_slider, 'value'))
-    widgets.jslink((step_text, 'value'), (play_button, 'value'))
-
-
-    img = widgets.interactive_output(update, {'i':step_text})
-#     rept = widgets.interactive_output(report, {'steps':step_text})
-    display(widgets.HBox([widgets.VBox([step_text, step_slider, play_button]), img]))
-
-    
-    
-    
-    
-    
-    
-def animate(num_frames=None, duration=None, fps=None):
+def animate_new(num_frames=None, duration=None, fps=None):
     if (num_frames is None) + (duration is None) + (fps is None) != 1:
         print('Must specify exactly 2 of num_frames, duration, and fps')
         return None
@@ -722,7 +612,6 @@ def animate(num_frames=None, duration=None, fps=None):
     ax.set_aspect('equal')
 
     pos = part.re_pos[:num_frames+1]
-    dpos = np.diff(pos, axis=0)
     orient = part.re_orient[:num_frames+1]
     cell = part.re_cell[:num_frames+1].T
     cell_range = [2 * s * np.arange(np.min(c), np.max(c)+1) for (s,c) in zip(part.cell_size, cell)]
@@ -733,7 +622,6 @@ def animate(num_frames=None, duration=None, fps=None):
                 ax.plot(*(w.mesh + trans).T, color='black')
 
     time_label = fig.text(0.5, 0.90, 's=0 t=0.00', ha='center', va='top', fontsize=10)
-    
     
     path = []
     bdy = []
@@ -745,34 +633,14 @@ def animate(num_frames=None, duration=None, fps=None):
         s = max(i,1)
         time_label.set_text('s={} t={:.2f}'.format(s,part.re_t[s]))
         for p in range(part.num):
-            path[p].set_data(pos[:s+1,p,0], pos[:s+1,p,1])
-            bdy[p].set_data(*(part.mesh[p].dot(orient[s,p].T) + pos[s,p]).T)
-        plt.show()
+            path[p].set_data(pos[:s+1,p,0], part.re_pos[:s+1,p,1])            
+            bdy[p].set_data(*(part.mesh[p].dot(part.re_orient[s,p].T) + part.re_pos[s,p]).T)
         return path + bdy
+    plt.close()
     
-    def draw(i):
-        l = update(i)
-        for l in L:
-            ax.plot(l)
+    anim = animation.FuncAnimation(fig, update, frames=num_frames+1, interval=1000/fps, blit=True, repeat=False)
     
-    l = widgets.Layout(width='150px')
-    step_interval = 1000*duration / max_steps
-    step_text = widgets.BoundedIntText(min=1, max=max_steps, value=1, continuous_update=True, layout=l)
-    step_slider = widgets.IntSlider(min=1, max=max_steps, value=1, readout=False, continuous_update=True, layout=l)
-    play_button = widgets.Play(min=1, max=max_steps, interval=step_interval, layout=l)
-    widgets.jslink((step_text, 'value'), (step_slider, 'value'))
-    widgets.jslink((step_text, 'value'), (play_button, 'value'))
-    
-    img = widgets.interactive_output(update, {'draw':step_text})
-#     rept = widgets.interactive_output(report, {'steps':step_text})
-    display(widgets.HBox([widgets.VBox([step_text, step_slider, play_button]), img]))
-
-    
-    
-    #plt.close()
-    #return animation.FuncAnimation(fig, update, frames=num_frames+1, interval=1000/fps, blit=True, repeat=False)
-    
-
+    return 
     
     
     
@@ -881,6 +749,49 @@ def draw_hist_old(wall, part, duration=10):
     img = widgets.interactive_output(draw, {'steps':step_text})
 #     rept = widgets.interactive_output(report, {'steps':step_text})
     display(widgets.HBox([widgets.VBox([step_text, step_slider, play_button]), img]))
+    
+    
+def animate(num_frames=None, duration=None, fps=None):
+    if (num_frames is None) + (duration is None) + (fps is None) != 1:
+        print('Must specify exactly 2 of num_frames, duration, and fps')
+        return None
+    elif (num_frames is None):
+        num_frames = int(np.round(fps * duration))
+    elif (fps is None):
+        fps = num_frames / duration
+    duration = num_frames / fps
+
+    fig, ax = plt.subplots(figsize=[10,10]);
+    ax.set_aspect('equal')
+
+    pos = part.re_pos[:num_frames+1]
+    orient = part.re_orient[:num_frames+1]
+    cell = part.re_cell[:num_frames+1].T
+    cell_range = [2 * s * np.arange(np.min(c), np.max(c)+1) for (s,c) in zip(part.cell_size, cell)]
+    translates = it.product(*cell_range)
+    if part.dim == 2:
+        for trans in translates:
+            for w in wall:
+                ax.plot(*(w.mesh + trans).T, color='black')
+
+    time_label = fig.text(0.5, 0.90, 's=0 t=0.00', ha='center', va='top', fontsize=10)
+    
+    
+    path = []
+    bdy = []
+    for p in range(part.num):
+        path.append(ax.plot([], [])[0])    
+        bdy.append(ax.plot([], [])[0])
+
+    def update(i):
+        s = max(i,1)
+        time_label.set_text('s={} t={:.2f}'.format(s,part.re_t[s]))
+        for p in range(part.num):
+            path[p].set_data(pos[:s+1,p,0], part.re_pos[:s+1,p,1])            
+            bdy[p].set_data(*(part.mesh[p].dot(part.re_orient[s,p].T) + part.re_pos[s,p]).T)
+        return path + bdy
+    plt.close()
+    return animation.FuncAnimation(fig, update, frames=num_frames+1, interval=1000/fps, blit=True, repeat=False)
     
 
 def flat_mesh(tangents):
