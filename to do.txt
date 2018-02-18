@@ -1,0 +1,5 @@
+edit setup instructions
+read caldas
+rework sinai
+clean up animation code
+diffusion constant
