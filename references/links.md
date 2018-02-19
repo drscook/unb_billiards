@@ -1,3 +1,5 @@
+http://www.dynamical-systems.org/sinai/
+
 short overviews
 - http://www.scholarpedia.org/article/Dynamical_billiards
 - https://en.wikipedia.org/wiki/Dynamical_billiards
