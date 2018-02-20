@@ -131,6 +131,12 @@ class Particles():
         self.vel_hist = []
         self.cell_offset = np.zeros([self.num, self.dim], dtype=int)  # tracks which cell the particle is in
         self.cell_offset_hist = []
+        
+        # Color particles (helpful for the future when we have many particles)
+        cm = plt.cm.gist_rainbow
+        idx = np.linspace(0, cm.N-1 , self.num).round().astype(int)
+        self.clr = [cm(i) for i in idx]
+
 
         
     def get_mesh(self):
@@ -192,10 +198,10 @@ def draw_state(steps=-1):
     pos = part.pos_hist[:steps]
     fig, ax = plt.subplots()
     for w in wall:
-        ax.plot(*(w.mesh.T), 'black')
+        ax.plot(*(w.mesh.T), color='black')
     for p in range(part.num):
-        ax.plot(pos[:,p,0], pos[:,p,1])
-        ax.plot(*(part.mesh[p]+pos[p,-1]).T, 'black')
+        ax.plot(pos[:,p,0], pos[:,p,1], color=part.clr[p])
+        ax.plot(*(part.mesh[p]+pos[p,-1]).T, color=part.clr[p])
     ax.set_aspect('equal')
     plt.show()
 

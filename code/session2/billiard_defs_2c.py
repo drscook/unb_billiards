@@ -238,8 +238,9 @@ def interactive_plot(num_frames=-1):
     l = widgets.Layout(width='150px')
     step_text = widgets.BoundedIntText(min=1, max=num_frames, value=1, layout=l)
     step_slider = widgets.IntSlider(min=1, max=num_frames, value=1, readout=False, continuous_update=False, layout=l)
+    widgets.jslink((step_text, 'value'), (step_slider, 'value'))
 
-    play_button = widgets.Play(min=1, max=num_frames, interval=250, layout=l)
+    play_button = widgets.Play(min=1, max=num_frames, interval=500, layout=l)
     widgets.jslink((step_text, 'value'), (play_button, 'value'))
 
     img = widgets.interactive_output(update, {'i':step_text})
