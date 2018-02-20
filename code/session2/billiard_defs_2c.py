@@ -179,8 +179,8 @@ def next_state(wall, part):
     w, p = w[0], p[0]
     part.col = {'w':w, 'p':p}
     wall[w].resolve_collision(part, p)
-    if np.abs(part.get_KE() - part.KE_init) > abs_tol:
-        raise Exception('Energy was not conserved')
+    #if np.abs(part.get_KE() - part.KE_init) > abs_tol:
+    #    raise Exception('Energy was not conserved')
     part.record_state()
 
 def clean_up(part):
