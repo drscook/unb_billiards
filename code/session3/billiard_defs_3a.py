@@ -267,7 +267,7 @@ def draw_state(num_frames=-1):
     draw_background(pos)
     for p in range(part.num):
         ax.plot(pos[:,p,0], pos[:,p,1], color=part.clr[p])
-        ax.plot(*(part.mesh[p].dot(orient[s,p].T) + pos[s,p]).T, color=part.clr[p])
+        ax.plot(*(part.mesh[p].dot(orient[-1,p].T) + pos[-1,p]).T, color=part.clr[p])
     ax.set_aspect('equal')
     plt.show()
 
