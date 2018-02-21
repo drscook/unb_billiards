@@ -124,21 +124,17 @@ class Particles():
         self.wp_mask = self.wp_dt.copy().astype(bool)
         
         self.t = 0.0
-        self.t_hist = []
+        self.cell_offset = np.zeros([self.num, self.dim], dtype=int)  # tracks which cell the particle is in
         self.col = {}
+        self.t_hist = []
         self.col_hist = []
         self.pos_hist = []
         self.vel_hist = []
-        self.cell_offset = np.zeros([self.num, self.dim], dtype=int)  # tracks which cell the particle is in
-        self.cell_offset_hist = []
         
         # Color particles (helpful for the future when we have many particles)
         cm = plt.cm.gist_rainbow
         idx = np.linspace(0, cm.N-1 , self.num).round().astype(int)
         self.clr = [cm(i) for i in idx]
-        
-
-
         
     def get_mesh(self):
         self.mesh = []
@@ -150,9 +146,9 @@ class Particles():
 
     def record_state(self):
         self.t_hist.append(self.t)
-        self.pos_hist.append(self.pos.copy())        
+        self.pos_hist.append(self.pos_to_global())
         self.vel_hist.append(self.vel.copy())
-        self.cell_offset_hist.append(self.cell_offset.copy())
+        #self.cell_offset_hist.append(self.cell_offset.copy())
 
     def get_KE(self):
         KE = self.mass * np.sum(self.vel**2, axis=-1)
@@ -170,7 +166,7 @@ def next_state(wall, part):
     part.t += part.dt
     part.pos += part.vel * part.dt
 
-    part.wp_mask = (part.wp_dt - part.dt) < abs_tol
+    part.wp_mask = (part.wp_dt - part.dt) < 1e-8
     w, p = np.nonzero(part.wp_mask)
     
     # later, we will need to protect against "complex collisions" where a particle make 
@@ -185,9 +181,9 @@ def next_state(wall, part):
 
 def clean_up(part):
     part.t_hist = np.asarray(part.t_hist)
-    part.cell_offset_hist = np.asarray(part.cell_offset_hist)
+    #part.cell_offset_hist = np.asarray(part.cell_offset_hist)
     part.pos_hist = np.asarray(part.pos_hist)
-    part.pos_hist = part.pos_hist + part.cell_offset_hist * part.cell_size * 2
+    #part.pos_hist = part.pos_hist + part.cell_offset_hist * part.cell_size * 2
     part.vel_hist = np.asarray(part.vel_hist)
     print('Done!! Steps = {}, Time = {:4f}'.format(len(part.t_hist)-1, part.t_hist[-1]))
     
@@ -195,23 +191,18 @@ def clean_up(part):
 ###  Support Functions ###
 #######################################################################################################
 
-def draw_background(cell):
-    ax = plt.gca()
-    cell_range = [2 * s * np.arange(np.min(c), np.max(c)+1) for (s,c) in zip(part.cell_size, cell.T)]
-    translates = it.product(*cell_range)
-    if part.dim == 2:
-        for trans in translates:
-            for w in wall:
-                ax.plot(*(w.mesh + trans).T, color='black')
-
-def draw_state(steps=-1):
-    pos = part.pos_hist[:steps]
-    cell = part.cell_offset_hist[:steps]
+def draw_state(num_frames=-1):
+    max_frames = part.pos_hist.shape[0]-1
+    if (num_frames == -1) or (num_frames > max_frames):
+        num_frames = max_frames
+        
+    pos = part.pos_hist[:num_frames+1]
     fig, ax = plt.subplots()
-    draw_background(cell)
+    for w in wall:
+        ax.plot(*(w.mesh.T), color='black')
     for p in range(part.num):
         ax.plot(pos[:,p,0], pos[:,p,1], color=part.clr[p])
-        ax.plot(*(part.mesh[p]+pos[p,-1]).T, color=part.clr[p])
+        ax.plot(*(part.mesh[p]+pos[-1,p]).T, color=part.clr[p])
     ax.set_aspect('equal')
     plt.show()
 
@@ -222,28 +213,27 @@ def interactive_plot(num_frames=-1):
 
     pos = part.pos_hist[:num_frames+1]
     dpos = np.diff(pos, axis=0)  # position change
-    cell = part.cell_offset_hist[:num_frames+1]
     
-    def update(i):
-        s = max(i,1)
+    def update(s):
         fig, ax = plt.subplots(figsize=[8,8]);
         ax.set_aspect('equal')
         plt.title('s={} t={:.2f}'.format(s,part.t_hist[s]))
-        draw_background(cell[:s+1])
+        for w in wall:
+            ax.plot(*(w.mesh.T), color='black')
         for p in range(part.num):
             ax.plot(pos[:s+1,p,0], pos[:s+1,p,1], color=part.clr[p])
             ax.plot(*(part.mesh[p] + pos[s,p]).T, color=part.clr[p])
         plt.show()
 
     l = widgets.Layout(width='150px')
-    step_text = widgets.BoundedIntText(min=1, max=num_frames, value=1, layout=l)
-    step_slider = widgets.IntSlider(min=1, max=num_frames, value=1, readout=False, continuous_update=False, layout=l)
+    step_text = widgets.BoundedIntText(min=0, max=num_frames, value=0, layout=l)
+    step_slider = widgets.IntSlider(min=0, max=num_frames, value=0, readout=False, continuous_update=False, layout=l)
     widgets.jslink((step_text, 'value'), (step_slider, 'value'))
 
-    play_button = widgets.Play(min=1, max=num_frames, interval=500, layout=l)
+    play_button = widgets.Play(min=0, max=num_frames, interval=500, layout=l)
     widgets.jslink((step_text, 'value'), (play_button, 'value'))
 
-    img = widgets.interactive_output(update, {'i':step_text})
+    img = widgets.interactive_output(update, {'s':step_text})
     display(widgets.HBox([widgets.VBox([step_text, step_slider, play_button]), img]))
     
 def make_unit(A, axis=-1):

@@ -125,6 +125,7 @@ class Particles():
         
         self.t = 0.0
         self.t_hist = []
+        self.cell_offset = np.zeros([self.num, self.dim], dtype=int)  # tracks which cell the particle is in
         self.col = {}
         self.col_hist = []
         self.pos_hist = []
@@ -145,8 +146,9 @@ class Particles():
 
     def record_state(self):
         self.t_hist.append(self.t)
-        self.pos_hist.append(self.pos.copy())        
+        self.pos_hist.append(self.pos_to_global())
         self.vel_hist.append(self.vel.copy())
+        #self.cell_offset_hist.append(self.cell_offset.copy())
 
     def get_KE(self):
         KE = self.mass * np.sum(self.vel**2, axis=-1)
@@ -164,7 +166,7 @@ def next_state(wall, part):
     part.t += part.dt
     part.pos += part.vel * part.dt
 
-    part.wp_mask = (part.wp_dt - part.dt) < abs_tol
+    part.wp_mask = (part.wp_dt - part.dt) < 1e-8
     w, p = np.nonzero(part.wp_mask)
     
     # later, we will need to protect against "complex collisions" where a particle make 
@@ -173,15 +175,15 @@ def next_state(wall, part):
     w, p = w[0], p[0]
     part.col = {'w':w, 'p':p}
     wall[w].resolve_collision(part, p)
-    if np.abs(part.get_KE() - part.KE_init) > abs_tol:
-        raise Exception('Energy was not conserved')
+    #if np.abs(part.get_KE() - part.KE_init) > abs_tol:
+    #    raise Exception('Energy was not conserved')
     part.record_state()
 
 def clean_up(part):
     part.t_hist = np.asarray(part.t_hist)
-    part.cell_offset_hist = np.asarray(part.cell_offset_hist)
+    #part.cell_offset_hist = np.asarray(part.cell_offset_hist)
     part.pos_hist = np.asarray(part.pos_hist)
-    part.pos_hist = part.pos_hist + part.cell_offset_hist * part.cell_size * 2
+    #part.pos_hist = part.pos_hist + part.cell_offset_hist * part.cell_size * 2
     part.vel_hist = np.asarray(part.vel_hist)
     print('Done!! Steps = {}, Time = {:4f}'.format(len(part.t_hist)-1, part.t_hist[-1]))
     
@@ -189,17 +191,60 @@ def clean_up(part):
 ###  Support Functions ###
 #######################################################################################################
 
-def draw_state(steps=-1):
-    pos = part.pos_hist[:steps]
+def draw_background(pos):
+    M = [[(np.min(pos[:,:,d])/(2*part.cell_size[d])).round()
+         ,(np.max(pos[:,:,d])/(2*part.cell_size[d])).round()
+         ] for d in range(part.dim)]
+    cell_range = [2 * part.cell_size[d] * np.arange(M[d][0], M[d][1]+1) for d in range(part.dim)]
+    translates = it.product(*cell_range)
+    ax = plt.gca()
+    if part.dim == 2:
+        for trans in translates:
+            for w in wall:
+                ax.plot(*(w.mesh + trans).T, color='black')
+
+def draw_state(num_frames=-1):
+    max_frames = part.pos_hist.shape[0]-1
+    if (num_frames == -1) or (num_frames > max_frames):
+        num_frames = max_frames
+        
+    pos = part.pos_hist[:num_frames+1]
     fig, ax = plt.subplots()
-    for w in wall:
-        ax.plot(*(w.mesh.T), color='black')
+    draw_background(pos)
     for p in range(part.num):
         ax.plot(pos[:,p,0], pos[:,p,1], color=part.clr[p])
         ax.plot(*(part.mesh[p]+pos[-1,p]).T, color=part.clr[p])
     ax.set_aspect('equal')
     plt.show()
 
+def interactive_plot(num_frames=-1):
+    max_frames = part.pos_hist.shape[0]-1
+    if (num_frames == -1) or (num_frames > max_frames):
+        num_frames = max_frames
+
+    pos = part.pos_hist[:num_frames+1]
+    dpos = np.diff(pos, axis=0)  # position change
+    
+    def update(s):
+        fig, ax = plt.subplots(figsize=[8,8]);
+        ax.set_aspect('equal')
+        plt.title('s={} t={:.2f}'.format(s,part.t_hist[s]))
+        draw_background(pos[:s+1])
+        for p in range(part.num):
+            ax.plot(pos[:s+1,p,0], pos[:s+1,p,1], color=part.clr[p])
+            ax.plot(*(part.mesh[p] + pos[s,p]).T, color=part.clr[p])
+        plt.show()
+
+    l = widgets.Layout(width='150px')
+    step_text = widgets.BoundedIntText(min=0, max=num_frames, value=0, layout=l)
+    step_slider = widgets.IntSlider(min=0, max=num_frames, value=0, readout=False, continuous_update=False, layout=l)
+    widgets.jslink((step_text, 'value'), (step_slider, 'value'))
+
+    play_button = widgets.Play(min=0, max=num_frames, interval=500, layout=l)
+    widgets.jslink((step_text, 'value'), (play_button, 'value'))
+
+    img = widgets.interactive_output(update, {'s':step_text})
+    display(widgets.HBox([widgets.VBox([step_text, step_slider, play_button]), img]))
     
 def make_unit(A, axis=-1):
     # Normalizes along given axis.  This means that Thus, np.sum(A**2, axis) gives a matrix of all 1's.

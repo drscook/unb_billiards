@@ -176,7 +176,7 @@ def draw_state(steps=-1):
         ax.plot(*(w.mesh.T), color='black')
     for p in range(part.num):
         ax.plot(pos[:,p,0], pos[:,p,1], color=part.clr[p])
-        ax.plot(*(part.mesh[p]+pos[p,-1]).T, color=part.clr[p])
+        ax.plot(*(part.mesh[p]+pos[-1,p]).T, color=part.clr[p])
     ax.set_aspect('equal')
     plt.show()
 
