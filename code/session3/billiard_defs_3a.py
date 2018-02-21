@@ -230,6 +230,7 @@ def clean_up(part):
     #part.cell_offset_hist = np.asarray(part.cell_offset_hist)
     part.pos_hist = np.asarray(part.pos_hist)
     part.vel_hist = np.asarray(part.vel_hist)
+    part.spin_hist = np.asarray(part.spin_hist)
     print('Done!! Steps = {}, Time = {:4f}'.format(len(part.t_hist)-1, part.t_hist[-1]))
     
 
@@ -307,10 +308,10 @@ def smoother(part, min_frames=None, orient=True):
         ddts = dts
         num_frames = np.ones_like(dts).astype(int)
     else:
-        short_step = (dts < abs_tol)
-        nominal_frame_length = np.min(dts[~short_step]) / min_frames
+        short_step = dts < abs_tol
+        nominal_frame_length = np.percentile(dts[~short_step], 25) / min_frames
         num_frames = np.round(dts / nominal_frame_length).astype(int) # Divide each step into pieces of length as close to nominal_frame_length as possible
-        num_frames[short_step] = 1
+        num_frames[num_frames<1] = 1
         ddts = dts / num_frames  # Compute frame length within each step
 
     # Now interpolate.  re_x denotes the interpolated version of x
@@ -331,7 +332,8 @@ def smoother(part, min_frames=None, orient=True):
             re_v.append(re_v[-1])
             re_s.append(re_s[-1])
             if orient == True:
-                B = [A.dot(Z) for (A,Z) in zip(re_o[-1], do)] # rotates each particle the right amount
+                #B = [A.dot(Z) for (A,Z) in zip(re_o[-1], do)] # rotates each particle the right amount
+                B = np.einsum('pde,pef->pdf', re_o[-1], do)
                 re_o.append(np.array(B))
             else:
                 re_o.append(re_o[-1])
