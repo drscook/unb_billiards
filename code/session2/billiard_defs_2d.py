@@ -113,6 +113,13 @@ class Particles():
         params = {'max_steps':50, 'dim':2, 'num':1, 'radius':[1.0], 'mass':[1.0], 'pp_collision_law':'pp_specular'}
         params.update(kwargs)
         
+        # Each parameter list must be num_particles long.  If not, this will extend by filling with the last entry
+        constants = ['radius', 'mass']
+        for const in constants:
+            c = listify(params[const])  #listify defined at bottom of this file
+            for p in range(len(c), params['num']):
+                c.append(c[-1])
+            params[const] = np.asarray(c).astype(float)
         for key, val in params.items():
             if isinstance(val, list):
                 val = np.asarray(val)  # converts lists to arrays
@@ -295,3 +302,17 @@ def sphere_mesh(dim, radius):
             w *= np.cos(grid[d])
         mesh.append(w)
     return np.asarray(mesh).T
+
+def listify(X):
+    """
+    Convert X to list if it's not already
+    """
+    if (X is None) or (X is np.nan):
+        return []
+    elif isinstance(X,str):
+        return [X]
+    else:
+        try:
+            return list(X)
+        except:
+            return [X]
