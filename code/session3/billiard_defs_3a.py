@@ -124,9 +124,9 @@ class Particles():
         self.wp_mask = self.wp_dt.copy().astype(bool)
         
         self.t = 0.0
-        self.t_hist = []
         self.cell_offset = np.zeros([self.num, self.dim], dtype=int)  # tracks which cell the particle is in
         self.col = {}
+        self.t_hist = []
         self.col_hist = []
         self.pos_hist = []
         self.vel_hist = []
@@ -183,7 +183,6 @@ def clean_up(part):
     part.t_hist = np.asarray(part.t_hist)
     #part.cell_offset_hist = np.asarray(part.cell_offset_hist)
     part.pos_hist = np.asarray(part.pos_hist)
-    #part.pos_hist = part.pos_hist + part.cell_offset_hist * part.cell_size * 2
     part.vel_hist = np.asarray(part.vel_hist)
     print('Done!! Steps = {}, Time = {:4f}'.format(len(part.t_hist)-1, part.t_hist[-1]))
     
@@ -223,8 +222,7 @@ def interactive_plot(num_frames=-1):
         num_frames = max_frames
 
     pos = part.pos_hist[:num_frames+1]
-    dpos = np.diff(pos, axis=0)  # position change
-    
+    dpos = np.diff(pos, axis=0)  # position change    
     def update(s):
         fig, ax = plt.subplots(figsize=[8,8]);
         ax.set_aspect('equal')
