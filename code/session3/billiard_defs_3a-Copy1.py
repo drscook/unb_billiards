@@ -16,7 +16,6 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import ipywidgets as widgets
 import itertools as it
-import scipy.linalg
 
 abs_tol = 1e-4
 rnd = np.random.RandomState(seed)
@@ -38,33 +37,11 @@ class Wall():
         part.wp_mask[self.idx, p] = False
         part.wp_mask[self.wrap_wall, p] = True
 
-    # Particle-wall no-slip law in any dimension from private correspondence with Cox and Feres.
-    #See last pages of: https://github.com/drscook/unb_billiards/blob/master/references/no%20slip%20collisions/feres_N_dim_no_slip_law_2017.pdf
-    # Uses functions like Lambda_nu defined at the end of this file
-    def wp_no_slip_law(self, part, p):
-        nu = self.normal(part.pos[p])
-        m = part.mass[p]
-        g = part.gamma[p]
-        r = part.radius[p]
-        d = (2*m*g**2)/(1+g**2)
-        
-        U_in = part.spin[p]
-        v_in = part.vel[p]
-        U_out = U_in - (d/(m*g**2) * Lambda_nu(U_in, nu)) + (d/(m*r*g**2)) * E_nu(v_in, nu)
-        v_out = (r*d/m) * Gamma_nu(U_in, nu) + v_in - 2 * Pi_nu(v_in, nu) - (d/m) * Pi(v_in,nu)
-
-        part.spin[p] = U_out
-        part.vel[p] = v_out
-        
     def resolve_collision(self, part, p):
         if self.wp_collision_law == 'wp_specular':
             self.wp_specular_law(part, p)
         elif self.wp_collision_law == 'wp_wrap':
             self.wp_wrap_law(part, p)
-        elif self.wp_collision_law == 'wp_no_slip':
-            self.wp_no_slip_law(part, p)
-        else:
-            raise Exception('Unknown collision law')
         
 class FlatWall(Wall):
     def __init__(self, **kwargs):
@@ -99,7 +76,7 @@ class FlatWall(Wall):
             t[mask] = np.inf
         t[t<0] = np.inf  #np.inf for negative times
         return t
-
+    
 class SphereWall(Wall):
     def __init__(self, **kwargs):
         # convient way to combine Wall defaults, FlatWall defaults, and user specified attributes
@@ -144,7 +121,7 @@ class Particles():
             params['gamma'] = 0
 
         # Each parameter list must be num_particles long.  If not, this will extend by filling with the last entry
-        constants = ['radius', 'mass', 'gamma']
+        constants = ['radius', 'mass']
         for const in constants:
             c = listify(params[const])  #listify defined at bottom of this file
             for p in range(len(c), params['num']):
@@ -158,7 +135,6 @@ class Particles():
         self.mom_inert = self.mass * (self.gamma * self.radius)**2
         self.get_mesh()
         
-        
         self.wp_dt = np.zeros([len(wall), self.num], dtype='float')
         self.wp_mask = self.wp_dt.copy().astype(bool)
         
@@ -169,7 +145,6 @@ class Particles():
         self.col_hist = []
         self.pos_hist = []
         self.vel_hist = []
-        self.spin_hist = []
         
         # Color particles (helpful for the future when we have many particles)
         cm = plt.cm.gist_rainbow
@@ -181,8 +156,6 @@ class Particles():
         for p in range(self.num):
             R = self.radius[p]
             M = sphere_mesh(dim=self.dim, radius=R)
-            if self.dim == 2:
-                M = np.vstack([M, [-R,0]])  # draw equator
             self.mesh.append(M)
         self.mesh = np.asarray(self.mesh)
 
@@ -190,8 +163,6 @@ class Particles():
         self.t_hist.append(self.t)
         self.pos_hist.append(self.pos_to_global())
         self.vel_hist.append(self.vel.copy())
-        self.spin_hist.append(self.spin.copy())
-        # we compute orient later in smoother
         #self.cell_offset_hist.append(self.cell_offset.copy())
 
     def get_KE(self):
@@ -209,8 +180,6 @@ def next_state(wall, part):
 
     part.t += part.dt
     part.pos += part.vel * part.dt
-    # We choose not to update orient during simulation because it does not affect the dynamics
-    # and would slow us down.  We compute it later in smoother if needed.
 
     part.wp_mask = (part.wp_dt - part.dt) < 1e-8
     w, p = np.nonzero(part.wp_mask)
@@ -257,36 +226,34 @@ def draw_background(pos):
                 ax.plot(*(w.mesh + trans).T, color='black')
 
 def draw_state(num_frames=-1):
-    max_frames = part.re_pos.shape[0]-1
+    max_frames = part.pos_hist.shape[0]-1
     if (num_frames == -1) or (num_frames > max_frames):
         num_frames = max_frames
         
-    pos = part.re_pos[:num_frames+1]
-    orient = part.re_orient[:num_frames+1]
+    pos = part.pos_hist[:num_frames+1]
     fig, ax = plt.subplots()
     draw_background(pos)
     for p in range(part.num):
         ax.plot(pos[:,p,0], pos[:,p,1], color=part.clr[p])
-        ax.plot(*(part.mesh[p].dot(orient[s,p].T) + pos[s,p]).T, color=part.clr[p])
+        ax.plot(*(part.mesh[p]+pos[-1,p]).T, color=part.clr[p])
     ax.set_aspect('equal')
     plt.show()
 
 def interactive_plot(num_frames=-1):
-    max_frames = part.re_pos.shape[0]-1
+    max_frames = part.pos_hist.shape[0]-1
     if (num_frames == -1) or (num_frames > max_frames):
         num_frames = max_frames
 
-    pos = part.re_pos[:num_frames+1]
-    orient = part.re_orient[:num_frames+1]
+    pos = part.pos_hist[:num_frames+1]
     dpos = np.diff(pos, axis=0)  # position change    
     def update(s):
         fig, ax = plt.subplots(figsize=[8,8]);
         ax.set_aspect('equal')
-        plt.title('s={} t={:.2f}'.format(s,part.re_t[s]))
+        plt.title('s={} t={:.2f}'.format(s,part.t_hist[s]))
         draw_background(pos[:s+1])
         for p in range(part.num):
             ax.plot(pos[:s+1,p,0], pos[:s+1,p,1], color=part.clr[p])
-            ax.plot(*(part.mesh[p].dot(orient[s,p].T) + pos[s,p]).T, color=part.clr[p])
+            ax.plot(*(part.mesh[p] + pos[s,p]).T, color=part.clr[p])
         plt.show()
 
     l = widgets.Layout(width='150px')
@@ -300,48 +267,6 @@ def interactive_plot(num_frames=-1):
     img = widgets.interactive_output(update, {'s':step_text})
     display(widgets.HBox([widgets.VBox([step_text, step_slider, play_button]), img]))
 
-def smoother(part, min_frames=None, orient=True):
-    t, x, v, s = part.t_hist, part.pos_hist, part.vel_hist, part.spin_hist
-    dts = np.diff(t)
-    if (min_frames is None):
-        ddts = dts
-        num_frames = np.ones_like(dts).astype(int)
-    else:
-        short_step = (dts < abs_tol)
-        nominal_frame_length = np.min(dts[~short_step]) / min_frames
-        num_frames = np.round(dts / nominal_frame_length).astype(int) # Divide each step into pieces of length as close to nominal_frame_length as possible
-        num_frames[short_step] = 1
-        ddts = dts / num_frames  # Compute frame length within each step
-
-    # Now interpolate.  re_x denotes the interpolated version of x
-    re_t, re_x, re_v, re_s = [t[0]], [x[0]], [v[0]], [s[0]]
-    re_o = [part.orient]
-    for (i, ddt) in enumerate(ddts):
-        re_t[-1] = t[i]
-        re_x[-1] = x[i]
-        re_v[-1] = v[i]
-        re_s[-1] = s[i]
-        dx = re_v[-1] * ddt
-        if orient == True:
-            do = [scipy.linalg.expm(ddt * U) for U in re_s[-1]] # incremental rotatation during each frame
-
-        for f in range(num_frames[i]):
-            re_t.append(re_t[-1] + ddt)
-            re_x.append(re_x[-1] + dx)
-            re_v.append(re_v[-1])
-            re_s.append(re_s[-1])
-            if orient == True:
-                B = [A.dot(Z) for (A,Z) in zip(re_o[-1], do)] # rotates each particle the right amount
-                re_o.append(np.array(B))
-            else:
-                re_o.append(re_o[-1])
-
-    part.re_t = np.asarray(re_t)
-    part.re_pos = np.asarray(re_x)
-    part.re_vel = np.asarray(re_v)
-    part.re_orient = np.asarray(re_o)
-    part.re_spin = np.asarray(re_s)    
-    
 def flat_mesh(tangents):
     pts = 100
     N, D = tangents.shape

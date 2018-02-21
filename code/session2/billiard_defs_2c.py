@@ -42,6 +42,9 @@ class Wall():
             self.wp_specular_law(part, p)
         elif self.wp_collision_law == 'wp_wrap':
             self.wp_wrap_law(part, p)
+        else:
+            raise Exception('Unknown collision law')
+
         
 class FlatWall(Wall):
     def __init__(self, **kwargs):
