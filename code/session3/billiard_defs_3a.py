@@ -195,8 +195,10 @@ class Particles():
         #self.cell_offset_hist.append(self.cell_offset.copy())
 
     def get_KE(self):
-        KE = self.mass * np.sum(self.vel**2, axis=-1)
-        return np.sum(KE) / 2
+        lin_KE = part.mass * (part.vel**2).sum(axis=-1)
+        ang_KE = part.mom_inert * (np.triu(part.spin,1)**2).sum(axis=-1).sum(axis=-1)
+        KE = lin_KE + ang_KE
+        return KE / 2
         
     def pos_to_global(self):
         # self.pos is local to current cell.  This return the global position by adding cell offset.
@@ -221,7 +223,7 @@ def next_state(wall, part):
     w, p = w[0], p[0]
     part.col = {'w':w, 'p':p}
     wall[w].resolve_collision(part, p)
-    #if np.abs(part.get_KE() - part.KE_init) > abs_tol:
+    #if np.abs(part.get_KE().sum() - part.KE_init) > abs_tol:
     #    raise Exception('Energy was not conserved')
     part.record_state()
 

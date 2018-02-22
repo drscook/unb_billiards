@@ -17,10 +17,87 @@ from mpl_toolkits.mplot3d import Axes3D
 import ipywidgets as widgets
 import itertools as it
 import scipy.linalg
+from scipy.interpolate import InterpolatedUnivariateSpline
 
 abs_tol = 1e-4
 rnd = np.random.RandomState(seed)
 
+def analyze_diffusion(start=1, anomalous=False):
+    x0 = part.pos_hist[0]
+    x = part.pos_hist[start:]
+    t = part.t_hist[start:]
+
+    displace = (x - x0).T
+    delta = (displace[np.newaxis,:] * displace[:,np.newaxis])
+    delta = np.mean(delta, axis=2)    
+    if anomalous == False:
+        #print('not anomalous')
+        D_matrix = delta / (2 *t)
+    else:
+        #print('anomalous')
+        D_matrix = delta / (2 * t * np.log(t))
+
+    trace = np.einsum('dds->s', D_matrix)
+    D_const = trace / part.dim
+    
+    fig, ax = plt.subplots(figsize=[8,8])
+    for d in range(dim):
+        for e in range(d+1):
+            ax.plot(t, D_matrix[d,e]) 
+    ax.plot(t, D_const, '.')
+    plt.show()
+    
+    l = np.round(t.shape[0]/4).astype(int)
+    D = np.mean(D_const[-l:])
+    #D = D_const[-1]
+    print(D)
+    def norm_pdf(x,mu=0,var=1):
+        return np.exp(-(x-mu)**2/(2*var)) / np.sqrt(2*np.pi*var)
+
+    def interactive_plot(num_frames=-1):
+        max_frames = x.shape[0]-1
+        if (num_frames == -1) or (num_frames > max_frames):
+            num_frames = max_frames
+        s= t[:,np.newaxis,np.newaxis]
+        if anomalous == False:
+            #print('not anomalous')
+            data = x / np.sqrt(s)
+        else:
+            #print('anomalous')
+            data = x / np.sqrt(s * np.log(s))
+        def update(s):
+            fig, ax = plt.subplots()
+            for d in range(part.dim):
+                q = np.histogram(data[s,:,d], density=True)            
+                h = q[1]
+                dh = np.diff(h) / 2
+                h = h[:-1] + dh            
+                hnew = np.linspace(h.min(),h.max(),300)
+                v = InterpolatedUnivariateSpline(h,q[0])(hnew)
+                if anomalous == False:
+                    #print('not anomalous')
+                    n = norm_pdf(hnew, mu=0, var=2*D)
+                else:
+                    #print('anomalous')
+                    n = norm_pdf(hnew, mu=0, var=2*D)
+                ax.plot(hnew,v)
+                ax.plot(hnew,n)
+
+        l = widgets.Layout(width='150px')
+        step_text = widgets.BoundedIntText(min=2, max=num_frames, value=0, layout=l)
+        step_slider = widgets.IntSlider(min=2, max=num_frames, value=0, readout=False, continuous_update=False, layout=l)
+        widgets.jslink((step_text, 'value'), (step_slider, 'value'))
+
+        play_button = widgets.Play(min=2, max=num_frames, step=1, interval=50, layout=l)
+        widgets.jslink((step_text, 'value'), (play_button, 'value'))
+
+        img = widgets.interactive_output(update, {'s':step_text})
+        display(widgets.HBox([widgets.VBox([step_text, step_slider, play_button]), img]))
+    interactive_plot()
+
+
+    
+    
 class Wall():
     # default values that apply to all geometries
     Wall_defaults = {'dim':2, 'gap_pad':0.0, 'wp_collision_law':'wp_specular'}
@@ -28,6 +105,9 @@ class Wall():
     def wp_specular_law(self, part, p):
         nu = self.normal(part.pos[p])
         part.vel[p] -= 2 * part.vel[p].dot(nu) * nu
+
+    def wp_terminate_law(self, part, p):
+        raise Exception('particle {} hit termination wall {}'.format(p, self.idx))         
         
     # particle wraps around to the opposite side of the billiard cell by flipping sign on dim d
     def wp_wrap_law(self, part, p):
@@ -59,6 +139,8 @@ class Wall():
     def resolve_collision(self, part, p):
         if self.wp_collision_law == 'wp_specular':
             self.wp_specular_law(part, p)
+        elif self.wp_collision_law == 'wp_terminate':
+            self.wp_terminate_law(part, p)
         elif self.wp_collision_law == 'wp_wrap':
             self.wp_wrap_law(part, p)
         elif self.wp_collision_law == 'wp_no_slip':
@@ -88,18 +170,19 @@ class FlatWall(Wall):
         return self.normal_static
 
     def get_wp_col_time(self, mask=None):
-        t = np.full(part.num, np.inf)  # default in np.inf
         nu = self.normal_static
         dx = part.pos - self.base_point
-        c = self.wp_gap_min - dx.dot(nu)
+        c = dx.dot(nu) - self.wp_gap_min
         b = part.vel.dot(nu)
-        idx = np.abs(b) >= abs_tol  # prevents divide by zero
-        t[idx] = c[idx] / b[idx]
-        if mask is not None:
-            t[mask] = np.inf
-        t[t<0] = np.inf  #np.inf for negative times
+        t = solve_linear(b, c, mask)
         return t
-
+               
+    # computes wp spacing
+    def get_wp_gap(self):
+        dx = part.pos - self.base_point
+        self.wp_gap = dx.dot(self.normal_static) - self.wp_gap_min
+        return self.wp_gap
+    
 class SphereWall(Wall):
     def __init__(self, **kwargs):
         # convient way to combine Wall defaults, FlatWall defaults, and user specified attributes
@@ -130,6 +213,11 @@ class SphereWall(Wall):
         t_small, t_big = solve_quadratic(a, b, c, mask)
         t = np.fmin(t_small, t_big)
         return t
+
+    def get_wp_gap(self):
+        dx = part.pos - self.base_point
+        self.wp_gap = np.linalg.norm(dx, axis=-1) - self.wp_gap_min
+        return self.wp_gap 
         
 class Particles():
     def __init__(self, **kwargs):
@@ -158,9 +246,17 @@ class Particles():
         self.mom_inert = self.mass * (self.gamma * self.radius)**2
         self.get_mesh()
         
+        self.pp_gap_min = cross_subtract(self.radius, -self.radius)
+        np.fill_diagonal(self.pp_gap_min, -1)  # no gap between a particle and itself
         
         self.wp_dt = np.zeros([len(wall), self.num], dtype='float')
         self.wp_mask = self.wp_dt.copy().astype(bool)
+
+        if self.pp_collision_law == 'pp_ignore':
+            self.pp_dt = np.array([np.inf])
+        else:
+            self.pp_dt = np.zeros([self.num, self.num], dtype='float')
+        self.pp_mask = self.pp_dt.copy().astype(bool)
         
         self.t = 0.0
         self.cell_offset = np.zeros([self.num, self.dim], dtype=int)  # tracks which cell the particle is in
@@ -193,19 +289,142 @@ class Particles():
         self.spin_hist.append(self.spin.copy())
         # we compute orient later in smoother
         #self.cell_offset_hist.append(self.cell_offset.copy())
+        self.col_hist.append(self.col.copy())
+
+    def get_pp_gap(self):
+        dx = cross_subtract(self.pos_to_global())  #cross_subtract defined below
+        self.pp_gap = np.linalg.norm(dx, axis=-1) - self.pp_gap_min
+        return self.pp_gap 
+
+    def check_gap(self, p=Ellipsis):
+        # if p is specified, checks gap for particles in list p.  Else, checks all.
+        self.wp_gap = np.array([w.get_wp_gap() for w in wall])
+        wp_check = self.wp_gap > -abs_tol
+        wp_check = wp_check[:,p]
+        if self.pp_collision_law == 'pp_ignore':
+            pp_check = [True]
+        else:
+            self.get_pp_gap()
+            pp_check = self.pp_gap > -abs_tol
+            pp_check = pp_check[:,p]
+        return np.all(wp_check) and np.all(pp_check)
+
+    def check_angular(self, p=Ellipsis):
+        orient_det = np.abs(np.linalg.det(self.orient[p]))-1
+        orient_det_check = np.abs(orient_det) < abs_tol
+        S = self.spin[p]
+        spin_skew = np.abs(S + np.swapaxes(S, -2, -1))
+        spin_skew = spin_skew.sum(axis=-1).sum(axis=-1)
+        spin_skew_check = np.abs(spin_skew) < abs_tol
+        return np.all(orient_det_check) and np.all(spin_skew_check)
+    
+    # Computes time to next collision with for each p-p  pair via (x1+v1*t-x2-v1*t) dot (x1+v1*t-x2-v1*t) = (r1+r2)^2
+    # Gives quadatric in t
+    def get_pp_col_time(self, mask=None):
+        dx = cross_subtract(self.pos_to_global())
+        dv = cross_subtract(self.vel)
+        a =   (dv*dv).sum(axis=-1)
+        b = 2*(dv*dx).sum(axis=-1)
+        c =   (dx*dx).sum(axis=-1) - self.pp_gap_min**2
+        t_small, t_big = solve_quadratic(a, b, c, mask=self.pp_mask)
+        t = np.fmin(t_small, t_big)
+        return t
+
+    def pp_specular_law(self, p1, p2):
+        m1, m2 = self.mass[p1], self.mass[p2]
+        M = m1 + m2
+        nu = make_unit(self.pos[p2] - self.pos[p1])
+        dv = self.vel[p2] - self.vel[p1]
+        w = dv.dot(nu) * nu
+        self.vel[p1] += 2 * (m2/M) * w
+        self.vel[p2] -= 2 * (m1/M) * w    
+
+    def pp_no_slip_law(self, p1, p2):
+        m1 = part.mass[p1]
+        m2 = part.mass[p2]
+        M = m1 + m2
+        g1 = part.gamma[p1]
+        g2 = part.gamma[p2]
+        r1 = part.radius[p1]
+        r2 = part.radius[p2]        
+
+        d = 2/((1/m1)*(1+1/g1**2) + (1/m2)*(1+1/g2**2))
+        dx = part.pos[p2] - part.pos[p1]    
+        nu = make_unit(dx)
+        U1_in = part.spin[p1]
+        U2_in = part.spin[p2]
+        v1_in = part.vel[p1]
+        v2_in = part.vel[p2]
+
+        U1_out = (U1_in-d/(m1*g1**2) * Lambda_nu(U1_in, nu)) \
+                    + (-d/(m1*r1*g1**2)) * E_nu(v1_in, nu) \
+                    + (-r2/r1)*(d/(m1*g1**2)) * Lambda_nu(U2_in, nu) \
+                    + d/(m1*r1*g1**2) * E_nu(v2_in, nu)
+
+        v1_out = (-r1*d/m1) * Gamma_nu(U1_in, nu) \
+                    + (v1_in - 2*m2/M * Pi_nu(v1_in, nu) - (d/m1) * Pi(v1_in, nu)) \
+                    + (-r2*d/m1) * Gamma_nu(U2_in, nu) \
+                    + (2*m2/M) * Pi_nu(v2_in, nu) + (d/m1) * Pi(v2_in, nu)
+
+        U2_out = (-r1/r2)*(d/(m2*g2**2)) * Lambda_nu(U1_in, nu) \
+                    + (-d/(m2*r2*g2**2)) * E_nu(v1_in, nu) \
+                    + (U2_in - (d/(m2*g2**2)) * Lambda_nu(U2_in, nu)) \
+                    + (d/(m2*r2*g2**2)) * E_nu(v2_in, nu)
+
+        v2_out = (r1*d/m2) * Gamma_nu(U1_in, nu) \
+                    + (2*m1/M) * Pi_nu(v1_in, nu) + (d/m2) * Pi(v1_in, nu) \
+                    + (r2*d/m2) * Gamma_nu(U2_in, nu) \
+                    + v2_in - (2*m1/M) * Pi_nu(v2_in, nu) - (d/m2) * Pi(v2_in,nu)
+        part.spin[p1] = U1_out
+        part.spin[p2] = U2_out
+        part.vel[p1] = v1_out
+        part.vel[p2] = v2_out    
+    
+    def resolve_collision(self, p1, p2):
+        if self.pp_collision_law == 'pp_specular':
+            self.pp_specular_law(p1, p2)
+        elif self.pp_collision_law == 'pp_no_slip':
+            self.pp_no_slip_law(p1, p2)
+        elif self.pp_collision_law == 'pp_ignore':
+            raise Exception('Should not detect pp collisions')
+        else:
+            raise Exception('Unknown pp collision law {}'.format(self.collision_law))
 
     def get_KE(self):
-        KE = self.mass * np.sum(self.vel**2, axis=-1)
-        return np.sum(KE) / 2
+        lin_KE = part.mass * (part.vel**2).sum(axis=-1)
+        ang_KE = part.mom_inert * (np.triu(part.spin,1)**2).sum(axis=-1).sum(axis=-1)
+        KE = lin_KE + ang_KE
+        return KE / 2
         
     def pos_to_global(self):
         # self.pos is local to current cell.  This return the global position by adding cell offset.
         return self.pos + self.cell_offset * self.cell_size * 2
 
+def check():
+    N = part.num
+    D = part.dim
+    if np.any([w.dim != D for w in wall]):
+        raise Exception('Not all wall and part dimensions agree')
+    if (part.pos.shape != (N,D)) or (part.vel.shape != (N,D)):
+        raise Exception('Some dynamical variables do not have correct shape')
+    if np.any((part.gamma < 0) | (part.gamma > np.sqrt(2/part.dim))):
+        raise Exception('illegal mass distribution parameter {}'.format(gamma))
+    if part.check_gap() == False:
+        raise Exception('A particle escaped')
+    if part.check_angular() == False:
+        raise Exception('A particle has invalid orintation or spin matrix')
+    if np.abs(part.get_KE().sum() - part.KE_init) > abs_tol:
+        raise Exception('Total kinetic energy was not conserved')
+
+    
 def next_state(wall, part):
     for (i,w) in enumerate(wall):
         part.wp_dt[i] = w.get_wp_col_time(part.wp_mask[i])
-    part.dt = np.min(part.wp_dt)
+    if part.pp_collision_law != 'pp_ignore':
+        part.pp_dt = part.get_pp_col_time(part.pp_mask)
+    part.dt = np.min([np.min(part.pp_dt), np.min(part.wp_dt)])
+    if np.isinf(part.dt):
+        raise Exception("No future collisions detected")
 
     part.t += part.dt
     part.pos += part.vel * part.dt
@@ -213,17 +432,22 @@ def next_state(wall, part):
     # and would slow us down.  We compute it later in smoother if needed.
 
     part.wp_mask = (part.wp_dt - part.dt) < 1e-8
-    w, p = np.nonzero(part.wp_mask)
+    part.pp_mask = (part.pp_dt - part.dt) < 1e-8
     
-    # later, we will need to protect against "complex collisions" where a particle make 
-    # multiple simultaneous collisions.  For simplicity of the code, we'll ignore this
-    # for now, knowing that we may get unexpected behavior if this occurs.
-    w, p = w[0], p[0]
-    part.col = {'w':w, 'p':p}
-    wall[w].resolve_collision(part, p)
-    #if np.abs(part.get_KE() - part.KE_init) > abs_tol:
-    #    raise Exception('Energy was not conserved')
-    part.record_state()
+    wp_counts = np.sum(part.wp_mask,axis=0)
+    pp_counts = np.sum(part.pp_mask,axis=0)
+    total_counts = wp_counts + pp_counts
+    if np.any(total_counts > 1):
+        raise Exception('Complex event - would re-randomize position of particles involved if implemented.  Until that is complete, simulation simply terminates.')
+    else:
+        part.col = []
+        for (w, p) in zip(*np.nonzero(part.wp_mask)):
+            part.col.append({'w':w, 'p':p})
+            wall[w].resolve_collision(part, p)
+        for (p1, p2) in zip(*np.nonzero(part.pp_mask)):
+            if p1 < p2:
+                part.col.append({'p':p1, 'q':p2})
+                part.resolve_collision(p1, p2)
 
 def clean_up(part):
     part.t_hist = np.asarray(part.t_hist)
@@ -295,7 +519,7 @@ def interactive_plot(num_frames=-1):
     step_slider = widgets.IntSlider(min=0, max=num_frames, value=0, readout=False, continuous_update=False, layout=l)
     widgets.jslink((step_text, 'value'), (step_slider, 'value'))
 
-    play_button = widgets.Play(min=0, max=num_frames, interval=500, layout=l)
+    play_button = widgets.Play(min=0, max=num_frames, interval=50, layout=l)
     widgets.jslink((step_text, 'value'), (play_button, 'value'))
 
     img = widgets.interactive_output(update, {'s':step_text})
@@ -436,6 +660,13 @@ def random_uniform_ball(num=1, dim=2, radius=1.0):
 #######################################################################################################
 ###  Basic Math Functions ###
 #######################################################################################################
+def cross_subtract(u, v=None):
+    if v is None:
+        v=u.copy()
+    w = u[np.newaxis,:] - v[:,np.newaxis]
+    return w
+
+
 def make_symmetric(A, skew=False):
     """
     Returns symmetric or skew-symmatric matrix by copying upper triangular onto lower.
@@ -453,6 +684,15 @@ def make_unit(A, axis=-1):
     A = np.asarray(A, dtype=float)
     M = np.linalg.norm(A, axis=axis, keepdims=True)
     return A / M
+
+def solve_linear(b, c, mask=None):
+    t = np.full(part.num, np.inf)  # default in np.inf    
+    idx = np.abs(b) >= abs_tol  # prevents divide by zero
+    t[idx] = -1 * c[idx] / b[idx]
+    if mask is not None:
+        t[mask] = np.inf
+    t[t<0] = np.inf  #np.inf for negative times
+    return t
 
 def solve_quadratic(a, b, c, mask=None):
     small = np.full_like(a, np.inf)  
