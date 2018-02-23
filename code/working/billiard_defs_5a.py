@@ -98,31 +98,47 @@ def analyze_diffusion(start=1, anomalous=False):
 
     
     
-class Wall():
-    # default values that apply to all geometries
-    Wall_defaults = {'dim':2, 'gap_pad':0.0, 'wp_collision_law':'wp_specular'}
+class CollisionLaw:
+    @staticmethod
+    def resolve_collision(wall, part, p):
+        raise Exception('You should implement the method resolve_collision() in a subclass.')
 
-    def wp_specular_law(self, part, p):
-        nu = self.normal(part.pos[p])
+class IgnoreLaw(CollisionLaw):
+    @staticmethod
+    def resolve_collision(wall, part, p):
+        pass
+
+class SpecularLaw(CollisionLaw):
+    @staticmethod
+    def resolve_collision(wall, part, p):
+        nu = wall.normal(part.pos[p])
         part.vel[p] -= 2 * part.vel[p].dot(nu) * nu
 
-    def wp_terminate_law(self, part, p):
-        raise Exception('particle {} hit termination wall {}'.format(p, self.idx))         
-        
-    # particle wraps around to the opposite side of the billiard cell by flipping sign on dim d
-    def wp_wrap_law(self, part, p):
+class TerminateLaw(CollisionLaw):
+    @staticmethod
+    def resolve_collision(wall, part, p):
+        raise Exception('particle {} hit termination wall {}'.format(p, wall.idx))
+
+class WrapLaw(CollisionLaw):
+    def __init__(self, wrap_dim, wrap_wall):
+        self.wrap_dim = wrap_dim
+        self.wrap_wall = wrap_wall
+
+    def resolve_collision(self, wall, part, p):
         d = self.wrap_dim   # which dim will have sign flip
         s = np.sign(part.pos[p, d]).astype(int)  # is it at + or -
         part.cell_offset[p, d] += s   # tracks cell position for each particle
         part.pos[p, d] *= -1   # flips sign of dime d
-        part.wp_mask[self.idx, p] = False
+        part.wp_mask[wall.idx, p] = False
         part.wp_mask[self.wrap_wall, p] = True
 
-    # Particle-wall no-slip law in any dimension from private correspondence with Cox and Feres.
-    #See last pages of: https://github.com/drscook/unb_billiards/blob/master/references/no%20slip%20collisions/feres_N_dim_no_slip_law_2017.pdf
-    # Uses functions like Lambda_nu defined at the end of this file
-    def wp_no_slip_law(self, part, p):
-        nu = self.normal(part.pos[p])
+# Particle-wall no-slip law in any dimension from private correspondence with Cox and Feres.
+#See last pages of: https://github.com/drscook/unb_billiards/blob/master/references/no%20slip%20collisions/feres_N_dim_no_slip_law_2017.pdf
+# Uses functions like Lambda_nu defined at the end of this file
+class NoSlipLaw(CollisionLaw):
+    @staticmethod
+    def resolve_collision(wall, part, p):
+        nu = wall.normal(part.pos[p])
         m = part.mass[p]
         g = part.gamma[p]
         r = part.radius[p]
@@ -135,38 +151,45 @@ class Wall():
 
         part.spin[p] = U_out
         part.vel[p] = v_out
-        
+
+
+class Wall():
+    # default values that apply to all geometries
+    def __init__(self, dim=2, gap_pad=0.0, collision_law=SpecularLaw):
+        self.dim = dim
+        self.gap_pad = gap_pad
+        self.collision_law = collision_law
+
     def resolve_collision(self, part, p):
-        if self.wp_collision_law == 'wp_specular':
-            self.wp_specular_law(part, p)
-        elif self.wp_collision_law == 'wp_terminate':
-            self.wp_terminate_law(part, p)
-        elif self.wp_collision_law == 'wp_wrap':
-            self.wp_wrap_law(part, p)
-        elif self.wp_collision_law == 'wp_no_slip':
-            self.wp_no_slip_law(part, p)
-        else:
-            raise Exception('Unknown collision law')
+        self.collision_law.resolve_collision(self, part, p)
+
+    @staticmethod
+    def normal(pos):
+        raise Exception('You should implement the method normal() in a subclass.')
+
+    @staticmethod
+    def get_mesh():
+        raise Exception('You should implement the method get_mesh() in a subclass.')
+
+    @staticmethod
+    def get_wp_col_time(self, mask=None):
+        raise Exception('You should implement the method get_wp_col_time() in a subclass.')
+
         
 class FlatWall(Wall):
-    def __init__(self, **kwargs):
-        # convient way to combine Wall defaults, FlatWall defaults, and user specified attributes
-        params = self.Wall_defaults.copy()
-        params.update(kwargs)
-    
-        params['normal_static'] = make_unit(params.pop('normal'))  # renames normal -> normal-static and makes unit vector
-        for key, val in params.items():  # saves params into the wall objeect
-            if isinstance(val, list):
-                val = np.asarray(val)  # converts lists to arrays
-            setattr(self, key, val)
-    
-        self.wp_gap_min = self.gap_pad
+    def __init__(self, base_point, normal, tangents, dim=2, gap_pad=0.0, collision_law=SpecularLaw):
+        super().__init__(dim=dim, gap_pad=gap_pad, collision_law=collision_law)
+        self.base_point = np.asarray(base_point)
+        self.normal_static = np.asarray(normal)
+        self.tangents = np.asarray(tangents)
+        self.wp_gap_min = gap_pad
         self.get_mesh()
-    
+
     def get_mesh(self):
         self.mesh = flat_mesh(self.tangents) + self.base_point
-        
-    def normal(self, pos):  # normal does not depend on collision point
+
+    def normal(self, pos):
+        # normal does not depend on collision point
         return self.normal_static
 
     def get_wp_col_time(self, mask=None):
@@ -176,24 +199,19 @@ class FlatWall(Wall):
         b = part.vel.dot(nu)
         t = solve_linear(b, c, mask)
         return t
-               
+
     # computes wp spacing
     def get_wp_gap(self):
         dx = part.pos - self.base_point
         self.wp_gap = dx.dot(self.normal_static) - self.wp_gap_min
         return self.wp_gap
-    
+
+
 class SphereWall(Wall):
-    def __init__(self, **kwargs):
-        # convient way to combine Wall defaults, FlatWall defaults, and user specified attributes
-        params = self.Wall_defaults.copy()
-        params.update(kwargs)
-    
-        for key, val in params.items():  # saves params into the wall objeect
-            if isinstance(val, list):
-                val = np.asarray(val)  # converts lists to arrays
-            setattr(self, key, val)
-    
+    def __init__(self, base_point, radius, dim=2, gap_pad=0.0, collision_law=SpecularLaw):
+        super().__init__(dim=dim, gap_pad=gap_pad, collision_law=collision_law)
+        self.base_point = np.asarray(base_point)
+        self.radius = radius
         self.wp_gap_min = self.radius + self.gap_pad
         self.get_mesh()
 
@@ -416,7 +434,6 @@ def check():
     if np.abs(part.get_KE().sum() - part.KE_init) > abs_tol:
         raise Exception('Total kinetic energy was not conserved')
 
-    
 def next_state(wall, part):
     for (i,w) in enumerate(wall):
         part.wp_dt[i] = w.get_wp_col_time(part.wp_mask[i])
@@ -448,6 +465,7 @@ def next_state(wall, part):
             if p1 < p2:
                 part.col.append({'p':p1, 'q':p2})
                 part.resolve_collision(p1, p2)
+    
 
 def clean_up(part):
     part.t_hist = np.asarray(part.t_hist)
