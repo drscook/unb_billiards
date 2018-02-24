@@ -152,6 +152,7 @@ class FlatWall(Wall):
     def __init__(self, **kwargs):
         # convient way to combine Wall defaults, FlatWall defaults, and user specified attributes
         params = self.Wall_defaults.copy()
+        # check key in kwargs against list of valid keys, throw error is not subset
         params.update(kwargs)
     
         params['normal_static'] = make_unit(params.pop('normal'))  # renames normal -> normal-static and makes unit vector

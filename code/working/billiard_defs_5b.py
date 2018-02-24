@@ -153,9 +153,11 @@ class NoSlipLaw(CollisionLaw):
         part.vel[p] = v_out
 
 
+
 class Wall():
+    Wall_defaults = {'dim':2, 'gap_pad':0.0, 'wp_collision_law':'wp_specular'}
     # default values that apply to all geometries
-    def __init__(self, dim=2, gap_pad=0.0, collision_law=SpecularLaw):
+    def __init__(self, dim=Wall::defaults['dim'], gap_pad=0.0, collision_law=SpecularLaw):
         self.dim = dim
         self.gap_pad = gap_pad
         self.collision_law = collision_law
@@ -177,10 +179,17 @@ class Wall():
 
         
 class FlatWall(Wall):
-    def __init__(self, base_point, normal, tangents, dim=2, gap_pad=0.0, collision_law=SpecularLaw):
+    def __init__(self, **kwargs):
+        required_keys = {'base_point', 'normal', 'tangents'}
+        optional_keys = {'dim', 'gap_pad', 'wp_collision_law', 'misc'}
+        if required_keys.issubset(kwargs.keys()) == False:
+            raise Exception('Required FlatWall kwargs missing: {}'.format(
+        
+        if valid_keys.issuperset(kwargs.keys()) == False:
+            raise Exception('Invalid kwarg given to FlatWall')
+        
+        
         super().__init__(dim=dim, gap_pad=gap_pad, collision_law=collision_law)
-        
-        
         self.base_point = np.asarray(base_point)
         self.normal_static = np.asarray(normal)
         self.tangents = np.asarray(tangents)
